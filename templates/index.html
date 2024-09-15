@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Particle Life Simulation with Timed Explosions</title>
+  <style>
+    body {
+      padding: 0;
+      margin: 0;
+    }
+
+    canvas {
+      display: block;
+      margin: 0 auto;
+      background-color: #000;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="particleCanvas"></canvas>
+
+<script>
+  const canvas = document.getElementById("particleCanvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  // Global Variables
+  const numColors = 5; // Number of different colors
+  const numParticles = 500; // Number of particles per color
+  const friction = 0.8; // Friction factor
+  const easing = 0.1; // Easing factor for smooth motion control post-explosion
+  const influenceRange = 100; // Range of influence
+  const particleSize = 3; // Size of particles
+  const interactionStrength = 0.03; // Base interaction strength
+  const collisionRepulsion = 0.09; // Repulsion factor when particles collide
+  const speed = 5;
+  const maxSpeed = 0.01; // Maximum speed of particles
+  const jitterThreshold = 0.001; // Velocity threshold to detect jittering
+  const maxNearbyParticles = 100; // Number of nearby particles to trigger explosion
+  const immuneDuration = 50; // Time in frames for immunity after explosion
+  const force = 1.5; // Explosion force
+  const gridCellSize = 50; // Size of each grid cell for concentration overlay
+  const showConcentrationOverlay = false; // Toggle variable for particle concentration overlay
+
+  const explosionInterval = 15; // Explosion interval in seconds
+  let lastExplosionTime = 0; // Timestamp of the last explosion
+  const deltaT = 0.9; // Time step for the simulation
+
+  // Generate distinct colors
+  function generateDistinctColors(numColors) {
+    const colors = [];
+    for (let i = 0; i < numColors; i++) {
+      const hue = (i / numColors) * 360; // Evenly spaced hues
+      colors.push(`hsl(${hue}, 80%, 60%)`); // Light, saturated colors
+    }
+    return colors;
+  }
+
+  const colors = generateDistinctColors(numColors);
+
+  const influenceMatrix = Array.from({ length: numColors }, () =>
+    Array.from({ length: numColors }, () => Math.random() * 2 - 1)
+  );
+
+  class Particle {
+    constructor(x, y, colorIndex) {
+      this.x = x;
+      this.y = y;
+      this.vx = 0;
+      this.vy = 0;
+      this.colorIndex = colorIndex;
+      this.immune = 0; // Immunity timer for explosions
+    }
+
+    update(particles) {
+      let ax = 0;
+      let ay = 0;
+
+      if (this.immune > 0) {
+        this.vx *= easing;
+        this.vy *= easing;
+        this.immune--;
+      } else {
+        // Calculate forces based on nearby particles
+        particles.forEach(p => {
+          if (p === this) return;
+          const dx = p.x - this.x;
+          const dy = p.y - this.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          // Attraction/Repulsion based on influence matrix
+          if (distance > 0 && distance < influenceRange) {
+            const influence = influenceMatrix[this.colorIndex][p.colorIndex];
+            const force = influence * interactionStrength;
+            ax += (dx / distance) * force;
+            ay += (dy / distance) * force;
+          }
+
+          // Collision repulsion
+          const minDistance = particleSize * 2;
+          if (distance < minDistance && distance > 0) {
+            const repulsion = (minDistance - distance) * collisionRepulsion;
+            ax -= (dx / distance) * repulsion;
+            ay -= (dy / distance) * repulsion;
+          }
+        });
+
+        // Update velocity using Velocity-Verlet integration
+        this.vx += 0.5 * ax * deltaT; // Update vx with half timestep and acceleration
+        this.vy += 0.5 * ay * deltaT; // Update vy with half timestep and acceleration
+      }
+
+      // Apply friction and clamp velocity
+      this.vx *= friction;
+      this.vy *= friction;
+
+      // Move the particle
+      this.x += this.vx * deltaT * speed;
+      this.y += this.vy * deltaT * speed;
+
+      // Border handling (wrapping and repulsion)
+      this.handleBorders();
+
+      // Clamp speed
+      const speedSquared = this.vx * this.vx + this.vy * this.vy;
+      if (speedSquared > maxSpeed * maxSpeed) {
+        const speedFactor = maxSpeed / Math.sqrt(speedSquared);
+        this.vx *= speedFactor;
+        this.vy *= speedFactor;
+      }
+    }
+
+    handleBorders() {
+      const edgeThreshold = 100;
+      const borderRepulsionForce = 0.1;
+
+      // Left edge
+      if (this.x < edgeThreshold) {
+        const force = (edgeThreshold - this.x) * borderRepulsionForce;
+        this.vx += force;
+      }
+
+      // Right edge
+      if (this.x > canvas.width - edgeThreshold) {
+        const force = (this.x - (canvas.width - edgeThreshold)) * borderRepulsionForce;
+        this.vx -= force;
+      }
+
+      // Top edge
+      if (this.y < edgeThreshold) {
+        const force = (edgeThreshold - this.y) * borderRepulsionForce;
+        this.vy += force;
+      }
+
+      // Bottom edge
+      if (this.y > canvas.height - edgeThreshold) {
+        const force = (this.y - (canvas.height - edgeThreshold)) * borderRepulsionForce;
+        this.vy -= force;
+      }
+
+      // Wrap around edges (if particle escapes due to strong forces)
+      this.x = (this.x + canvas.width) % canvas.width;
+      this.y = (this.y + canvas.height) % canvas.height;
+    }
+
+    explode(nearbyParticles) {
+      nearbyParticles.forEach(p => {
+        const dx = p.x - this.x;
+        const dy = p.y - this.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance > 0 && distance < influenceRange) {
+          p.vx += (dx / distance) * force;
+          p.vy += (dy / distance) * force;
+          p.immune = immuneDuration;
+        }
+      });
+
+      this.immune = immuneDuration;
+    }
+
+    draw() {
+      ctx.fillStyle = colors[this.colorIndex];
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, particleSize, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const particles = [];
+  for (let i = 0; i < numColors; i++) {
+    for (let j = 0; j < numParticles; j++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      particles.push(new Particle(x, y, i));
+    }
+  }
+
+  function getExponentialThresholds(counts) {
+    const maxCount = Math.max(...counts);
+    const minCount = Math.min(...counts);
+    const range = maxCount - minCount;
+
+    const highThreshold = minCount + 0.85 * range;
+    const midThreshold = minCount + 0.55 * range;
+    const lowThreshold = minCount + 0.35 * range;
+
+    return { highThreshold, midThreshold, lowThreshold };
+  }
+
+  function drawConcentrationOverlay() {
+    const gridWidth = Math.ceil(canvas.width / gridCellSize);
+    const gridHeight = Math.ceil(canvas.height / gridCellSize);
+
+    const concentrationGrid = Array.from({ length: gridHeight }, () => Array(gridWidth).fill(0));
+
+    particles.forEach(p => {
+      const gridX = Math.floor(p.x / gridCellSize);
+      const gridY = Math.floor(p.y / gridCellSize);
+      if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
+        concentrationGrid[gridY][gridX]++;
+      }
+    });
+
+    const counts = concentrationGrid.flat();
+    const { highThreshold, midThreshold, lowThreshold } = getExponentialThresholds(counts);
+
+    for (let y = 0; y < gridHeight; y++) {
+      for (let x = 0; x < gridWidth; x++) {
+        const count = concentrationGrid[y][x];
+        if (count > 0) {
+          let alpha = 0;
+          if (count >= highThreshold) {
+            alpha = 1;
+          } else if (count >= midThreshold) {
+            alpha = 0.6;
+          } else if (count >= lowThreshold) {
+            alpha = 0.3;
+          }
+
+          const color = `rgba(255, 255, 255, ${alpha})`;
+          ctx.fillStyle = color;
+          ctx.fillRect(x * gridCellSize, y * gridCellSize, gridCellSize, gridCellSize);
+        }
+      }
+    }
+  }
+
+  function explodeRandomParticle() {
+    const randomIndex = Math.floor(Math.random() * particles.length);
+    const particle = particles[randomIndex];
+
+    const nearbyParticles = particles.filter(p => {
+      const dx = p.x - particle.x;
+      const dy = p.y - particle.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      return distance < influenceRange;
+    });
+
+    particle.explode(nearbyParticles);
+  }
+
+  function update() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const currentTime = performance.now();
+    if (currentTime - lastExplosionTime > explosionInterval * 1000) {
+      explodeRandomParticle();
+      lastExplosionTime = currentTime;
+    }
+
+    particles.forEach(p => p.update(particles));
+    particles.forEach(p => p.draw());
+
+    if (showConcentrationOverlay) {
+      drawConcentrationOverlay();
+    }
+
+    requestAnimationFrame(update);
+  }
+
+  update();
+</script>
+</body>
+</html>
